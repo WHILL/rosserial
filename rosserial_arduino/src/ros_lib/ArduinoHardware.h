@@ -41,6 +41,11 @@
   #include <WProgram.h>  // Arduino 0022
 #endif
 
+#if defined(__STM32F1__) and !(defined(SERIAL_USB)) // For STM32 Serial Flash at Arduino_STM32(rogerclark)
+#define USE_STM32_HW_SERIAL
+#define USE_STM32_HW_SERIAL_UART0 // Use same port as uploading sketch
+#endif
+
 #if defined(__MK20DX128__) || defined(__MK20DX256__) || defined(__MK64FX512__) || defined(__MK66FX1M0__) || defined(__MKL26Z64__)
   #if defined(USE_TEENSY_HW_SERIAL)
     #define SERIAL_CLASS HardwareSerial // Teensy HW Serial
@@ -73,7 +78,7 @@ class ArduinoHardware {
 #if defined(USBCON) and !(defined(USE_USBCON))
       /* Leonardo support */
       iostream = &Serial1;
-#elif defined(USE_TEENSY_HW_SERIAL) or defined(USE_STM32_HW_SERIAL)
+#elif defined(USE_TEENSY_HW_SERIAL) or defined(USE_STM32_HW_SERIAL) and !(defined(USE_STM32_HW_SERIAL_UART0))
       iostream = &Serial1;
 #else
       iostream = &Serial;
