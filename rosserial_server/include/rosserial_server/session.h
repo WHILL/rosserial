@@ -61,7 +61,8 @@ class Session : boost::noncopyable
 {
 public:
   Session(boost::asio::io_service& io_service)
-    : socket_(io_service),
+    : io_service_(io_service),
+      socket_(io_service),
       sync_timer_(io_service),
       require_check_timer_(io_service),
       ros_spin_timer_(io_service),
@@ -76,6 +77,8 @@ public:
     require_check_interval_ = boost::posix_time::milliseconds(1000);
     ros_spin_interval_ = boost::posix_time::milliseconds(10);
     require_param_name_ = "~require";
+
+    unrecognised_topic_retry_threshold_ = ros::param::param("~unrecognised_topic_retry_threshold", 0);
 
     nh_.setCallbackQueue(&ros_callback_queue_);
 
@@ -135,6 +138,15 @@ public:
     active_ = false;
   }
 
+  void shutdown()
+  {
+    if (is_active())
+    {
+      stop();
+    }
+    io_service_.stop();
+  }
+
   bool is_active()
   {
     return active_;
@@ -165,6 +177,10 @@ private:
       ros_spin_timer_.expires_from_now(ros_spin_interval_);
       ros_spin_timer_.async_wait(boost::bind(&Session::ros_spin_timeout, this,
                                              boost::asio::placeholders::error));
+    }
+    else
+    {
+      shutdown();
     }
   }
 
@@ -227,7 +243,9 @@ private:
     } else {
       if (callbacks_.count(topic_id) == 1) {
         try {
-          callbacks_[topic_id](stream);
+          // stream includes the check sum byte. 
+          ros::serialization::IStream msg_stream(stream.getData(), stream.getLength()-1);
+          callbacks_[topic_id](msg_stream);
         } catch(ros::serialization::StreamOverrunException e) {
           if (topic_id < 100) {
             ROS_ERROR("Buffer overrun when attempting to parse setup message.");
@@ -238,7 +256,15 @@ private:
         }
       } else {
         ROS_WARN("Received message with unrecognized topicId (%d).", topic_id);
-        // TODO: Resynchronize on multiples?
+
+        if ((unrecognised_topic_retry_threshold_ > 0) && ++unrecognised_topics_ >= unrecognised_topic_retry_threshold_)
+        {
+          // The threshold for unrecognised topics has been exceeded.
+          // Attempt to request the topics from the client again
+          ROS_WARN("Unrecognised topic threshold exceeded. Requesting topics from client");
+          attempt_sync();
+          unrecognised_topics_ = 0;
+        }
       }
     }
 
@@ -310,6 +336,10 @@ private:
       sync_timer_.expires_from_now(interval);
       sync_timer_.async_wait(boost::bind(&Session::sync_timeout, this,
             boost::asio::placeholders::error));
+    }
+    else
+    {
+      shutdown();
     }
   }
 
@@ -482,6 +512,7 @@ private:
     set_sync_timeout(timeout_interval_);
   }
 
+  boost::asio::io_service& io_service_;
   Socket socket_;
   AsyncReadBuffer<Socket> async_read_buffer_;
   enum { buffer_max = 1023 };
@@ -498,6 +529,8 @@ private:
   boost::asio::deadline_timer require_check_timer_;
   boost::asio::deadline_timer ros_spin_timer_;
   std::string require_param_name_;
+  int unrecognised_topic_retry_threshold_{ 0 };
+  int unrecognised_topics_{ 0 };
 
   std::map<uint16_t, boost::function<void(ros::serialization::IStream&)> > callbacks_;
   std::map<uint16_t, PublisherPtr> publishers_;
